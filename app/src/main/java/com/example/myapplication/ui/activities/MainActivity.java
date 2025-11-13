@@ -39,13 +39,23 @@ public class MainActivity extends AppCompatActivity {
 
         super.onCreate(savedInstanceState);
 
-        // Check user and redirect before showing content
-        userRepository = new UserRepository(this);
-        checkUserAndRedirect();
-
-        // Only set content view if we're not redirecting
+        // --- Sửa lỗi: Di chuyển checkUserAndRedirect() lên trước --- 
+        FirebaseUser currentUser = FirebaseAuth.getInstance().getCurrentUser();
+        if (currentUser == null) {
+            // User chưa đăng nhập, chuyển ngay về LoginActivity
+            startActivity(new Intent(this, LoginActivity.class));
+            finish();
+            return; // Dừng thực thi onCreate tại đây để tránh lỗi
+        }
+        
+        // Nếu đã đăng nhập, mới tiếp tục set content view và các việc khác
         setContentView(R.layout.activity_main);
 
+        // Khởi tạo các repository và manager
+        userRepository = new UserRepository(this);
+        wishlistManager = WishlistManager.getInstance();
+
+        // Kiểm tra quyền thông báo
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
                     != PackageManager.PERMISSION_GRANTED) {
@@ -54,12 +64,11 @@ public class MainActivity extends AppCompatActivity {
             }
         }
 
-        // Initialize UserRepository and WishlistManager
-        userRepository = new UserRepository(this);
-        wishlistManager = WishlistManager.getInstance();
+        // --- Sửa lỗi: Chỉ load wishlist sau khi đã chắc chắn có user ---
+        loadUserWishlist(currentUser.getUid());
 
-        // Load user wishlist (get current user's UID)
-        loadUserWishlist();
+        // Kiểm tra xem user có phải là HOST không và chuyển hướng nếu cần
+        checkIfUserIsHost(currentUser.getUid());
 
         if (savedInstanceState == null) {
             getSupportFragmentManager()
@@ -70,45 +79,8 @@ public class MainActivity extends AppCompatActivity {
 
         setupFooterNavigation();
 
-        // Check for navigation intents
-        String fragmentToLoad = getIntent().getStringExtra("FRAGMENT_TO_LOAD");
-        if (fragmentToLoad != null) {
-            switch (fragmentToLoad) {
-                case "wishlists":
-                    loadFragment(new WishlistFragment());
-                    updateButtonStates(R.id.button_wishlists);
-                    break;
-                case "trips":
-                    loadFragment(new TripsFragment());
-                    updateButtonStates(R.id.button_trips);
-                    break;
-                case "profile":
-                    loadFragment(new ProfileFragment());
-                    updateButtonStates(R.id.button_profile);
-                    break;
-                case "messages":
-                    // Handle in the specific check below
-                    break;
-                default:
-                    loadFragment(new ExploreFragment());
-                    updateButtonStates(R.id.button_explore);
-                    break;
-            }
-        }
-
-        // Neu intent contains "messages", load MessagesFragment
-        if (fragmentToLoad != null && fragmentToLoad.equals("messages")) {
-            MessagesFragment messagesFragment = new MessagesFragment();
-
-            // Pass any extras to the fragment
-            Bundle extras = getIntent().getExtras();
-            if (extras != null) {
-                messagesFragment.setArguments(extras);
-            }
-
-            loadFragment(messagesFragment);
-            updateButtonStates(R.id.button_messages);
-        }
+        // Xử lý intent điều hướng fragment
+        handleFragmentNavigation(getIntent());
     }
 
     private void updateButtonStates(int selectedButtonId) {
@@ -152,67 +124,74 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void loadFragment(Fragment fragment) {
-        // Prevent multiple concurrent transactions
-        if (isFragmentTransactionInProgress) {
-            return;
-        }
-
-        // Prevent loading the same fragment type that's already showing
+        if (isFragmentTransactionInProgress) return;
         Fragment currentFragment = getSupportFragmentManager().findFragmentById(R.id.fragment_container);
-        if (currentFragment != null && currentFragment.getClass().equals(fragment.getClass())) {
-            return;
-        }
+        if (currentFragment != null && currentFragment.getClass().equals(fragment.getClass())) return;
 
         isFragmentTransactionInProgress = true;
-
         getSupportFragmentManager()
                 .beginTransaction()
                 .replace(R.id.fragment_container, fragment)
-                .commitAllowingStateLoss(); // Use commitAllowingStateLoss instead of commit
-
-        // Reset the flag after a short delay to allow the transaction to complete
+                .commitAllowingStateLoss();
         new android.os.Handler().postDelayed(() -> isFragmentTransactionInProgress = false, 300);
     }
 
-    private void loadUserWishlist() {
-        String userUID = FirebaseAuth.getInstance().getCurrentUser().getUid();
+    // --- Sửa lỗi: Chấp nhận uid làm tham số ---
+    private void loadUserWishlist(String userUID) {
         Log.d("WishlistLoad", "Loading wishlist for user: " + userUID);
-
         wishlistManager.loadUserWishlist(
                 userUID,
                 userRepository,
-                unused -> {
-                    // Sau khi load xong, cập nhật giao diện hoặc adapter nếu cần
-                    Log.d("WishlistLoad", "Wishlist loaded successfully.");
-                    // Nếu cần cập nhật lại giao diện hoặc adapter, làm ở đây
-                },
-                e -> {
-                    Log.e("WishlistLoad", "Lỗi khi load wishlist", e);
-                }
+                unused -> Log.d("WishlistLoad", "Wishlist loaded successfully."),
+                e -> Log.e("WishlistLoad", "Lỗi khi load wishlist", e)
         );
     }
 
-    private void checkUserAndRedirect() {
-        FirebaseUser currentUser = FirebaseAuth.getInstance().getCurrentUser();
-
-        if (currentUser == null) {
-            // User is not logged in, go to login screen
-            startActivity(new Intent(this, LoginActivity.class));
-            finish();
-            return;
-        }
-
-        userRepository.getUserByUid(currentUser.getUid(),
+    // --- Sửa lỗi: Tách riêng logic kiểm tra Host ---
+    private void checkIfUserIsHost(String userUID) {
+        userRepository.getUserByUid(userUID,
                 user -> {
                     if (user != null && user.role == Role.HOST) {
-                        // We're in MainActivity and need to go to HostMainActivity
                         startActivity(new Intent(this, HostMainActivity.class));
                         finish();
                     }
                 },
                 e -> {
-                    // Error occurred, just continue in current activity
+                    // Lỗi, không cần xử lý đặc biệt, cứ ở lại MainActivity
                 }
         );
+    }
+    
+    private void handleFragmentNavigation(Intent intent) {
+        String fragmentToLoad = intent.getStringExtra("FRAGMENT_TO_LOAD");
+        if (fragmentToLoad != null) {
+            switch (fragmentToLoad) {
+                case "wishlists":
+                    loadFragment(new WishlistFragment());
+                    updateButtonStates(R.id.button_wishlists);
+                    break;
+                case "trips":
+                    loadFragment(new TripsFragment());
+                    updateButtonStates(R.id.button_trips);
+                    break;
+                case "profile":
+                    loadFragment(new ProfileFragment());
+                    updateButtonStates(R.id.button_profile);
+                    break;
+                case "messages":
+                    MessagesFragment messagesFragment = new MessagesFragment();
+                    Bundle extras = getIntent().getExtras();
+                    if (extras != null) {
+                        messagesFragment.setArguments(extras);
+                    }
+                    loadFragment(messagesFragment);
+                    updateButtonStates(R.id.button_messages);
+                    break;
+                default:
+                    loadFragment(new ExploreFragment());
+                    updateButtonStates(R.id.button_explore);
+                    break;
+            }
+        }
     }
 }

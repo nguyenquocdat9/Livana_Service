@@ -1,3 +1,4 @@
+
 plugins {
     alias(libs.plugins.android.application)
     id("com.google.gms.google-services") version "4.4.2" apply false
@@ -90,6 +91,9 @@ dependencies {
 
     // chart
     implementation ("com.github.PhilJay:MPAndroidChart:v3.1.0")
+
+    // EncryptedSharedPreferences
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
 
 }
